@@ -1,6 +1,6 @@
 # GMU Smart Patriot
 
-[![Live Demo](https://img.shields.io/badge/demo-gmu--smartpatriot.vercel.app-006633?style=flat-square)](https://gmu-smartpatriot.vercel.app)
+[![Live Demo](https://img.shields.io/badge/demo-gmu--smartpatriot-55.vercel.app-006633?style=flat-square)](https://gmu-smartpatriot-55.vercel.app)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?style=flat-square&logo=typescript)](https://www.typescriptlang.org)
 
@@ -482,7 +482,7 @@ This project is for educational purposes. George Mason University names, logos, 
 
 ## Links
 
-- **Live Demo:** [gmu-smartpatriot.vercel.app](https://gmu-smartpatriot.vercel.app)
+- **Live Demo:** [gmu-smartpatriot-55.vercel.app](https://gmu-smartpatriot-55.vercel.app)
 - **Repository:** [github.com/yashdayma55/gmu-smartpatriot](https://github.com/yashdayma55/gmu-smartpatriot)
 - **George Mason University:** [gmu.edu](https://www.gmu.edu)
 - **GMU Computer Science:** [cs.gmu.edu](https://cs.gmu.edu)
