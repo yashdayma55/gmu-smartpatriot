@@ -10,6 +10,24 @@
 
 ---
 
+## Table of Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Data Flow](#data-flow)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Module Details](#module-details)
+- [Knowledge Base](#knowledge-base)
+- [Search & Ranking](#search--ranking)
+- [API Reference](#api-reference)
+- [UI Components](#ui-components)
+- [Configuration](#configuration)
+- [Getting Started](#getting-started)
+- [Contributing](#contributing)
+
+---
+
 ## Features
 
 - **Live GMU Web Search** – Uses [Tavily](https://tavily.com) to search official GMU domains (cs.gmu.edu, catalog.gmu.edu, registrar.gmu.edu, etc.) in real time
@@ -38,7 +56,132 @@
 - **UI:** React 19, Tailwind CSS 4
 - **AI:** [Groq API](https://console.groq.com) (Llama 3.3 70B Versatile)
 - **Search:** [Tavily API](https://tavily.com) (web search)
+- **Scraping:** Cheerio (HTML parsing)
 - **Language:** TypeScript 5
+- **Fonts:** Geist Sans, Geist Mono (next/font)
+- **Build:** React Compiler (babel-plugin-react-compiler)
+
+---
+
+## Architecture
+
+### High-Level Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              CLIENT (Browser)                                     │
+│  ┌──────────────────────────────────────┐  ┌───────────────────────────────────┐ │
+│  │         page.tsx (Chat UI)            │  │     PatriotAvatar.tsx             │ │
+│  │  • Message list, input form           │  │  • Mascot (idle/thinking/speaking) │ │
+│  │  • State: messages, lastSources       │  │  • GMU branding                   │ │
+│  │  • POST /api/advisor                  │  │                                   │ │
+│  └──────────────────┬───────────────────┘  └───────────────────────────────────┘ │
+└─────────────────────┼───────────────────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                          NEXT.JS APP ROUTER (Server)                              │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │                    POST /api/advisor (Primary Flow)                          │ │
+│  │  1. Parse message + history                                                  │ │
+│  │  2. searchGmu(message) ──► Tavily API (multiple targeted queries)            │ │
+│  │  3. Rank results (domain + path weights)                                     │ │
+│  │  4. Build context (max 9000 chars) + system prompt                           │ │
+│  │  5. Groq API (llama-3.3-70b-versatile, temp=0.2)                             │ │
+│  │  6. Return { answer, sources }                                               │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐ │
+│  │                    POST /api/chat (Alternative Flow)                         │ │
+│  │  1. retrieveRelevantChunks(message) ──► gmuKnowledge.ts (keyword match)      │ │
+│  │  2. Groq API (llama-3.1-8b-instant, temp=0.3)                                │ │
+│  │  3. Conditional source link (trigger words)                                  │ │
+│  └─────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                      │
+        ┌─────────────┼─────────────┐
+        ▼             ▼             ▼
+┌──────────────┐ ┌──────────┐ ┌──────────────────┐
+│  Tavily API  │ │ Groq API │ │  GMU Web Pages   │
+│  (Search)    │ │ (LLM)    │ │  (catalog, cs,   │
+│              │ │          │ │   registrar…)    │
+└──────────────┘ └──────────┘ └──────────────────┘
+```
+
+### Layered View
+
+| Layer | Modules | Responsibility |
+|-------|---------|----------------|
+| **Presentation** | `page.tsx`, `PatriotAvatar.tsx`, `layout.tsx` | Chat UI, mascot, GMU branding, responsive layout |
+| **API** | `api/advisor/route.ts`, `api/chat/route.ts` | Request handling, orchestration, error responses |
+| **Search & Retrieval** | `searchGmu.ts`, `retrieve.ts` | Live web search (Tavily), static knowledge retrieval |
+| **Data** | `gmuKnowledge.ts`, `scrapeGmu.ts` | BS/MS CS knowledge chunks, Cheerio-based catalog scraping |
+| **External** | Tavily, Groq | Web search, LLM inference |
+
+---
+
+## Data Flow
+
+### Primary Flow: `/api/advisor` (Live Search)
+
+```
+User types question
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 1. buildMemorySummary(history) → "Student: … Patriot: …"             │
+└─────────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 2. searchGmu(message, 4)                                            │
+│    • buildSearchQueries() → [ "site:gmu.edu …", "site:cs.gmu.edu…" ] │
+│    • tavilySearchSingle() per query (parallel possible)              │
+│    • Dedupe URLs, merge results                                     │
+│    • Score = Tavily + domainWeight + pathWeight                     │
+│    • Return top 4                                                   │
+└─────────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 3. Build context string (Source 1… Source 2…), trim to 9000 chars   │
+└─────────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 4. Groq chat completions                                            │
+│    system: "You are Patriot… Rules: Use ONLY GMU snippets…"         │
+│    user: context + "Student question: …"                            │
+└─────────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 5. Return { answer, sources: [{label, title, url}, …] }             │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Alternative Flow: `/api/chat` (Static Knowledge)
+
+```
+User question
+       │
+       ▼
+retrieveRelevantChunks(query, 3)
+  • Filter by graduate vs undergraduate intent
+  • Keyword scoring (text + tags + title + category + contacts)
+  • Return top 3 chunks
+       │
+       ▼
+Build context from chunks (with contacts)
+       │
+       ▼
+Groq (llama-3.1-8b-instant) with full history
+       │
+       ▼
+shouldIncludeSourceLink(query) → include source only if triggers match
+       │
+       ▼
+Return { answer, sources }
+```
 
 ---
 
@@ -69,6 +212,197 @@ GMU-SmartPatriot/
 ├── tsconfig.json
 └── README.md
 ```
+
+---
+
+## Module Details
+
+### `src/app/api/advisor/route.ts`
+
+| Detail | Value |
+|--------|-------|
+| **Purpose** | Main chat endpoint used by the UI |
+| **Model** | `llama-3.3-70b-versatile` (Groq) |
+| **Temperature** | 0.2 |
+| **Max context** | 9,000 characters |
+| **Sources per response** | Up to 4 |
+| **Input** | `{ message, history }` |
+| **Output** | `{ answer, sources }` |
+
+**System prompt rules:** Use only GMU snippets; do not guess professor names, emails, or policies; if info is missing, say so; keep responses student-focused.
+
+### `src/app/api/chat/route.ts`
+
+| Detail | Value |
+|--------|-------|
+| **Purpose** | Fallback endpoint using static knowledge base |
+| **Model** | `llama-3.1-8b-instant` (Groq) |
+| **Temperature** | 0.3 |
+| **Top chunks** | 3 |
+| **Source triggers** | credit, requirement, catalog, link, website, page, "where can i find", "more info" |
+
+### `src/server/searchGmu.ts`
+
+- **Intent classifiers:** `isMsCsQuestion`, `isBsCsQuestion`, `isRegistrarQuestion`, `isHousingQuestion`, `isAssistantshipQuestion`, `isTuitionMoneyQuestion`, `detectCourseCode`
+- **Query builder:** Always adds `site:gmu.edu`; adds domain-specific queries based on intent
+- **Tavily config:** `include_raw_content: true`, `include_answer: false`
+
+### `src/utils/retrieve.ts`
+
+- **Scoring:** Word overlap (query words in chunk text, tags, title, category, contacts)
+- **Category filter:** Graduate vs undergraduate based on keywords (`ms cs`, `master`, `graduate`)
+- **Default topK:** 3
+
+### `src/server/scrapeGmu.ts`
+
+- **Exports:** `getMsCsRequirementsText()`, `getCourseDescription(courseCode)`, `GMU_SOURCE_URLS`
+- **Selectors:** `main`, `.page-content`, `#content`, `body` (fallback)
+- **Note:** Currently used for programmatic access; primary UI flow uses Tavily search
+
+---
+
+## Knowledge Base
+
+`gmuKnowledge.ts` defines `KnowledgeChunk[]` with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique identifier |
+| `title` | string | Human-readable title |
+| `url` | string | Official GMU page URL |
+| `category` | string | e.g. `Academics/Undergraduate CS`, `Academics/Graduate MS CS` |
+| `tags` | string[] | Searchable keywords |
+| `text` | string | Chunk content |
+| `contacts` | KnowledgeContact[] | Optional emails, phones, URLs |
+
+**Chunk count:** 14 (8 BS CS, 6 MS CS)
+
+**Categories:**
+- `Academics/Undergraduate CS` — BS overview, degree structure, advising, getting started, honors, contacts
+- `Academics/Graduate MS CS` — MS overview, requirements, core areas, advising, foundation, project/thesis, contacts
+
+---
+
+## Search & Ranking
+
+### Domain Weights
+
+| Domain | Weight |
+|--------|--------|
+| catalog.gmu.edu | 3.0 |
+| cs.gmu.edu | 3.0 |
+| registrar.gmu.edu | 2.8 |
+| graduate.gmu.edu | 2.5 |
+| housing.gmu.edu | 2.5 |
+| financialaid.gmu.edu | 2.3 |
+| dining.gmu.edu, transportation.gmu.edu, students.gmu.edu, provost.gmu.edu | 2.0 |
+| gmu.edu | 1.0 |
+| Unlisted | 0.5 |
+
+### Path-Based Boosts (by question intent)
+
+- **CS questions:** +3 cs.gmu.edu, +2 computer-science path, +1.5 /cs/, -2 IT programs, -3 assistantship pages (if not assistantship Q)
+- **Registrar questions:** +3 registrar.gmu.edu, +2 academic-calendar
+- **Housing questions:** +3 housing.gmu.edu
+- **Assistantship questions:** +4 cs.gmu.edu + path "assistant", +2 graduate.gmu.edu
+- **Tuition/financial:** +3 financialaid.gmu.edu, +1.5 tuition path
+
+### Final Score
+
+`combinedScore = tavilyScore + domainWeight + pathWeight`
+
+---
+
+## API Reference
+
+### `POST /api/advisor`
+
+Primary endpoint. Live Tavily search + Groq.
+
+**Request:**
+```json
+{
+  "message": "What are the MS CS degree requirements?",
+  "history": [
+    { "role": "user", "content": "Tell me about GMU CS" },
+    { "role": "assistant", "content": "..." }
+  ]
+}
+```
+
+**Response (200):**
+```json
+{
+  "answer": "...",
+  "sources": [
+    { "label": "GMU Source 1", "title": "Computer Science, MS", "url": "https://catalog.gmu.edu/..." }
+  ]
+}
+```
+
+**Errors:** `400` (missing message), `500` (missing GROQ_API_KEY, Groq/Tavily errors)
+
+### `POST /api/chat`
+
+Static knowledge base + Groq. Same request shape. Sources included only when query contains trigger words.
+
+---
+
+## UI Components
+
+### `page.tsx` (Home)
+
+| Element | Description |
+|---------|-------------|
+| **Top banner** | GMU green (#006633), GMU logo badge (#FFCC33), "Prototype – Not an official GMU tool" |
+| **Header** | Title "GMU Assistant – Patriot", short description |
+| **Chat card** | 2/3 width (lg), 70–75vh, scrollable messages, source list, input form |
+| **Message bubbles** | User: right-aligned, green; Assistant: left-aligned, slate |
+| **Loading state** | "Patriot is reviewing GMU pages…" with ping animation |
+| **Sources** | Collapsible list with links to official GMU pages |
+
+### `PatriotAvatar.tsx`
+
+| Prop | Type | Values |
+|------|------|--------|
+| `mode` | `MascotMode` | `idle` \| `thinking` \| `speaking` |
+
+| Mode | Animation | Status text |
+|------|-----------|-------------|
+| idle | none | "Ask Patriot anything about George Mason University." |
+| thinking | `animate-bounce` | "Patriot is thinking about your question…" |
+| speaking | `animate-pulse` | "Patriot is answering with details from GMU." |
+
+**Visual:** GMU green/gold gradient circle, "PATRIOT" bar, face with eyes and mouth; mouth changes on thinking.
+
+---
+
+## Configuration
+
+| File | Key settings |
+|------|--------------|
+| `next.config.ts` | `reactCompiler: true` |
+| `layout.tsx` | Geist fonts, metadata |
+| `.env.local` | `GROQ_API_KEY`, `TAVILY_API_KEY` |
+
+### NPM Scripts
+
+| Script | Command | Purpose |
+|--------|---------|---------|
+| `dev` | `next dev` | Development server |
+| `build` | `next build` | Production build |
+| `start` | `next start` | Production server |
+
+### Dependencies
+
+| Package | Version | Use |
+|---------|---------|-----|
+| next | 16.0.3 | Framework |
+| react, react-dom | 19.2.0 | UI |
+| cheerio | ^1.1.2 | HTML parsing (scrapeGmu) |
+| groq-sdk | ^0.35.0 | (Available; advisor uses raw fetch) |
+| tailwindcss | ^4 | Styling |
+| typescript | ^5 | Type checking |
 
 ---
 
@@ -125,63 +459,6 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 npm run build
 npm start
 ```
-
----
-
-## API Endpoints
-
-### `POST /api/advisor`
-
-Primary endpoint used by the chat UI. It:
-
-1. Searches GMU web pages via Tavily with query-specific targeting
-2. Ranks results by domain authority (catalog, CS dept, registrar, etc.)
-3. Sends context to Groq (Llama 3.3 70B) for answer generation
-4. Returns the answer and source links
-
-**Request body:**
-```json
-{
-  "message": "What are the MS CS degree requirements?",
-  "history": [
-    { "role": "user", "content": "Tell me about GMU CS" },
-    { "role": "assistant", "content": "..." }
-  ]
-}
-```
-
-**Response:**
-```json
-{
-  "answer": "...",
-  "sources": [
-    { "label": "GMU Source 1", "title": "Computer Science, MS", "url": "https://catalog.gmu.edu/..." }
-  ]
-}
-```
-
-### `POST /api/chat`
-
-Alternative endpoint using the static knowledge base (`gmuKnowledge.ts`) instead of live search. Useful for offline or low-cost scenarios.
-
----
-
-## How Search Works
-
-`searchGmu.ts` builds targeted queries based on question intent:
-
-- **CS programs** → `site:cs.gmu.edu`, `site:catalog.gmu.edu`
-- **Course codes** (e.g., CS 583) → exact phrase search on catalog and CS pages
-- **Registration / calendar** → `site:registrar.gmu.edu`
-- **Housing** → `site:housing.gmu.edu`
-- **Assistantships** → GTA/GRA-specific pages on cs.gmu.edu and graduate.gmu.edu
-- **Financial aid** → `site:financialaid.gmu.edu`
-
-Results are ranked using:
-
-- **Domain weights** – Higher weight for catalog.gmu.edu, cs.gmu.edu, registrar.gmu.edu
-- **Path relevance** – CS questions prefer CS pages; assistantship questions prefer assistantship pages
-- **Tavily score** – Original search relevance
 
 ---
 
